@@ -12,10 +12,17 @@ def _get_port() -> int:
     """Parse HEALTHCHECK_PORT env var, falling back to 8080 on invalid values."""
     port_str = os.getenv("HEALTHCHECK_PORT", "8080")
     try:
-        return int(port_str)
+        port = int(port_str)
     except ValueError:
         logger.warning("Invalid HEALTHCHECK_PORT '%s', using default 8080", port_str)
         return 8080
+    if not 1 <= port <= 65535:
+        logger.warning(
+            "HEALTHCHECK_PORT '%s' out of range (1-65535), using default 8080",
+            port_str,
+        )
+        return 8080
+    return port
 
 
 PORT = _get_port()
