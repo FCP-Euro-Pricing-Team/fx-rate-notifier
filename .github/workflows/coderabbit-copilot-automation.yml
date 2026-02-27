@@ -1,22 +1,18 @@
-name: CodeRabbit → Copilot Automation
-# Job 1: When CodeRabbit requests changes, comment @coderabbitai asking it to create
-#         a consolidated findings issue.
-# Job 2: When CodeRabbit creates an issue, assign Copilot and add labels (CodeRabbit
-#         can't do this itself — its gh CLI sandbox lacks permission).
-# Job 3: When a Copilot-assigned issue is closed, notify the original PR.
-# Job 4: When CodeRabbit approves, notify that the cycle is complete.
+name: CodeRabbit → Copilot Automation Bridge
+# CodeRabbit reviews → Creates consolidated GitHub issue → Assigns to Copilot → Copilot fixes autonomously
 
 on:
   pull_request_review:
     types: [submitted]
 
+  # Required for monitoring Copilot-assigned issues
   issues:
-    types: [opened, closed]
+    types: [closed]
 
 jobs:
-  # Job 1: When CodeRabbit requests changes, prompt it to create a consolidated issue
-  trigger-consolidated-issue:
-    name: Trigger consolidated issue creation
+  # Job 1: When CodeRabbit requests changes, trigger consolidated issue creation + Copilot assignment
+  auto-delegate-to-copilot:
+    name: Auto-delegate to Copilot
     if: |
       github.event_name == 'pull_request_review' &&
       github.event.review.user.login == 'coderabbitai[bot]' &&
@@ -24,12 +20,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Ask CodeRabbit to create issue and assign Copilot
+      - name: Trigger CodeRabbit to create consolidated issue and assign Copilot
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const prNumber = context.payload.pull_request.number;
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -38,67 +35,34 @@ jobs:
               body: `@coderabbitai Please create **ONE consolidated GitHub issue** for all findings in this PR:
 
             **Step 1: Create consolidated issue** (using MCP tool \`issue_write\`)
-            - Title: \`Fix CodeRabbit findings: PR #${prNumber} - All Files\`
+            - Title: \`[CodeRabbit Review] PR #${prNumber} - Consolidated Fixes\`
             - Body must include:
-              - Original PR: #${prNumber}
-              - All findings grouped by file with severity
+              - All findings grouped by file
               - Full code context and suggested fixes for each
+              - Link back to PR #${prNumber}
               - Checklist of all items to fix
-            - Labels: \`coderabbit-review\`, \`parent-issue\`, \`bug-fix\`
+            - Labels: \`coderabbit-review\`, plus any relevant labels (\`bug\`, \`security\`, etc.)
 
             **Step 2: Assign to Copilot** (using MCP tool \`assign_copilot_to_issue\`)
             - Assign the consolidated issue to @copilot
             - Copilot will create a PR with \`Fixes #<issue>\` to resolve all items
 
+            **Step 3: Request Copilot PR review** (using MCP tool \`request_copilot_review\`)
+            - Request Copilot to also review PR #${prNumber} directly
+
             Create ONE issue with ALL findings, not separate issues per finding.
             Report back with the issue number when complete.`
             });
 
-            console.log(`Triggered CodeRabbit to create consolidated issue for PR #${prNumber}`);
+            console.log(`Triggered CodeRabbit automation for PR #${prNumber} in ${repo}`);
 
-  # Job 2: When CodeRabbit creates a findings issue, assign Copilot and add labels
-  assign-copilot-to-issue:
-    name: Assign Copilot to findings issue
-    if: |
-      github.event_name == 'issues' &&
-      github.event.action == 'opened' &&
-      github.event.issue.user.login == 'coderabbitai[bot]' &&
-      contains(github.event.issue.title, 'CodeRabbit findings')
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Assign Copilot and add labels
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-
-            // Add labels
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              labels: ['coderabbit-review', 'parent-issue', 'bug-fix'],
-            });
-
-            // Assign Copilot (uses display name, not bot login)
-            await github.rest.issues.addAssignees({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              assignees: ['@copilot'],
-            });
-
-            console.log(`Assigned Copilot and added labels to issue #${issue.number}`);
-
-  # Job 3: When a Copilot-assigned issue is closed, notify the original PR
+  # Job 2: When a Copilot-assigned issue is closed, notify the original PR
   monitor-copilot-progress:
     name: Monitor Copilot fixes
     if: |
       github.event_name == 'issues' &&
       github.event.action == 'closed' &&
-      contains(github.event.issue.assignees.*.login, 'Copilot')
+      contains(github.event.issue.assignees.*.login, 'copilot')
     runs-on: ubuntu-latest
 
     steps:
@@ -130,10 +94,10 @@ jobs:
 
             const copilotPR = pulls.data.find(pr =>
               pr.body && pr.body.includes(`#${issue.number}`) &&
-              (pr.user.login === 'copilot-swe-agent[bot]' || pr.user.login === 'github-actions[bot]')
+              (pr.user.login === 'copilot[bot]' || pr.user.login === 'github-actions[bot]')
             );
 
-            let message = `**Copilot completed fixes for issue #${issue.number}.**`;
+            let message = `Copilot completed fixes for issue #${issue.number}.`;
             if (copilotPR) {
               message += `\n\nCopilot's fix PR: #${copilotPR.number}`;
             }
@@ -148,7 +112,7 @@ jobs:
 
             console.log(`Notified PR #${prNumber} about Copilot completing issue #${issue.number}`);
 
-  # Job 4: When CodeRabbit approves, notify that the cycle is complete
+  # Job 3: When CodeRabbit approves, notify that the cycle is complete
   check-completion:
     name: Check if all fixes complete
     if: |
