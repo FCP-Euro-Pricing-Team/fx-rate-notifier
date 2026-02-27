@@ -14,7 +14,7 @@ A Claude Code skill (`/review-and-fix`) that handles the full review-and-fix loo
 
 ## Workflow
 
-```
+```text
 /commit-push-pr → CodeRabbit reviews → /review-and-fix kicks in automatically
 ```
 
@@ -42,6 +42,8 @@ After any PR push to FCP-Euro-Pricing-Team repos, Claude automatically:
 1. Polls for CodeRabbit review (every 60s, up to 10 min)
 2. If CHANGES_REQUESTED → invokes `/review-and-fix`
 3. If APPROVED → notifies user
+
+**Rate limit note:** Each poll is one GitHub API call. At 60s intervals over 10 min, that's ~10 calls per PR. With concurrent PRs the volume scales linearly — well within GitHub's 5,000 requests/hour limit for authenticated users.
 
 ### Guardrails
 
