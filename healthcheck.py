@@ -3,23 +3,34 @@ import os
 import json
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-PORT = int(os.getenv("HEALTHCHECK_PORT", 8080))
+
+def _get_port() -> int:
+    """Parse HEALTHCHECK_PORT env var, falling back to 8080 on invalid values."""
+    port_str = os.getenv("HEALTHCHECK_PORT", "8080")
+    try:
+        return int(port_str)
+    except ValueError:
+        logger.warning("Invalid HEALTHCHECK_PORT '%s', using default 8080", port_str)
+        return 8080
+
+
+PORT = _get_port()
 VERSION = "0.1.0"
 
 
 class HealthHandler(BaseHTTPRequestHandler):
     """Handles GET /health requests."""
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         if self.path == "/health":
             response = {
                 "status": "ok",
                 "version": VERSION,
-                "timestamp": str(datetime.now()),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "environment": os.getenv("ENVIRONMENT", "development"),
             }
             self.send_response(200)
@@ -30,20 +41,33 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, format, *args):
+    def log_message(self, format: str, *args: object) -> None:
         logger.info(format, *args)
 
 
-def start_server():
-    """Start the healthcheck HTTP server."""
+def start_server() -> None:
+    """Start the healthcheck HTTP server.
+
+    Listens on 0.0.0.0 at the port specified by HEALTHCHECK_PORT
+    environment variable (default: 8080). Responds with JSON health
+    status at GET /health.
+    """
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"Healthcheck server running on port {PORT}")
+    logger.info("Healthcheck server running on port %d", PORT)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
-    server.server_close()
+        logger.info("Healthcheck server shutting down")
+    except OSError:
+        logger.error("Failed to bind port %d", PORT, exc_info=True)
+        raise
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     start_server()
