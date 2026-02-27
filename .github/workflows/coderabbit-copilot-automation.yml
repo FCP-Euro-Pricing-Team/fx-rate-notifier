@@ -1,0 +1,104 @@
+name: CodeRabbit → Copilot Automation Monitor
+# CodeRabbit handles issue creation + Copilot assignment natively via org UI settings.
+# This workflow monitors progress and notifies when the cycle completes.
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+  # Required for monitoring Copilot-assigned issues
+  issues:
+    types: [closed]
+
+jobs:
+  # Job 1: When a Copilot-assigned issue is closed, notify the original PR
+  monitor-copilot-progress:
+    name: Monitor Copilot fixes
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'closed' &&
+      contains(github.event.issue.assignees.*.login, 'Copilot')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify PR that Copilot completed fixes
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+
+            // Extract PR number from issue body (looks for PR #123 pattern)
+            const prMatches = issue.body ? issue.body.match(/PR #(\d+)/) : null;
+            if (!prMatches) {
+              console.log(`No PR reference found in issue #${issue.number} body. Skipping.`);
+              return;
+            }
+
+            const prNumber = parseInt(prMatches[1], 10);
+
+            // Find Copilot's fix PR if one exists
+            const pulls = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              sort: 'created',
+              direction: 'desc',
+              per_page: 10,
+            });
+
+            const copilotPR = pulls.data.find(pr =>
+              pr.body && pr.body.includes(`#${issue.number}`) &&
+              (pr.user.login === 'copilot-swe-agent[bot]' || pr.user.login === 'github-actions[bot]')
+            );
+
+            let message = `**Copilot completed fixes for issue #${issue.number}.**`;
+            if (copilotPR) {
+              message += `\n\nCopilot's fix PR: #${copilotPR.number}`;
+            }
+            message += `\n\nPlease re-review @coderabbitai`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: message,
+            });
+
+            console.log(`Notified PR #${prNumber} about Copilot completing issue #${issue.number}`);
+
+  # Job 2: When CodeRabbit approves, notify that the cycle is complete
+  check-completion:
+    name: Check if all fixes complete
+    if: |
+      github.event_name == 'pull_request_review' &&
+      github.event.review.user.login == 'coderabbitai[bot]' &&
+      github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notify completion
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const prAuthor = context.payload.pull_request.user.login;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                '**All automated fixes complete!**',
+                '',
+                '- CodeRabbit review: Approved',
+                '- Copilot issues: Resolved',
+                '',
+                'Ready for human review and merge.',
+                '',
+                `cc: @${prAuthor}`,
+              ].join('\n'),
+            });
+
+            console.log(`PR #${prNumber} approved by CodeRabbit. Notified ${prAuthor}.`);
