@@ -1,15 +1,17 @@
 name: CodeRabbit → Copilot Automation
-# When CodeRabbit requests changes, Job 1 comments @coderabbitai asking it to
-# create a consolidated findings issue and assign Copilot.
-# Jobs 2-3 monitor progress and notify the PR when the cycle completes.
+# Job 1: When CodeRabbit requests changes, comment @coderabbitai asking it to create
+#         a consolidated findings issue.
+# Job 2: When CodeRabbit creates an issue, assign Copilot and add labels (CodeRabbit
+#         can't do this itself — its gh CLI sandbox lacks permission).
+# Job 3: When a Copilot-assigned issue is closed, notify the original PR.
+# Job 4: When CodeRabbit approves, notify that the cycle is complete.
 
 on:
   pull_request_review:
     types: [submitted]
 
-  # Required for monitoring Copilot-assigned issues
   issues:
-    types: [closed]
+    types: [opened, closed]
 
 jobs:
   # Job 1: When CodeRabbit requests changes, prompt it to create a consolidated issue
@@ -54,7 +56,43 @@ jobs:
 
             console.log(`Triggered CodeRabbit to create consolidated issue for PR #${prNumber}`);
 
-  # Job 2: When a Copilot-assigned issue is closed, notify the original PR
+  # Job 2: When CodeRabbit creates a findings issue, assign Copilot and add labels
+  assign-copilot-to-issue:
+    name: Assign Copilot to findings issue
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'opened' &&
+      github.event.issue.user.login == 'coderabbitai[bot]' &&
+      contains(github.event.issue.title, 'CodeRabbit findings')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Assign Copilot and add labels
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+
+            // Add labels
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: ['coderabbit-review', 'parent-issue', 'bug-fix'],
+            });
+
+            // Assign Copilot (uses display name, not bot login)
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              assignees: ['@copilot'],
+            });
+
+            console.log(`Assigned Copilot and added labels to issue #${issue.number}`);
+
+  # Job 3: When a Copilot-assigned issue is closed, notify the original PR
   monitor-copilot-progress:
     name: Monitor Copilot fixes
     if: |
@@ -110,7 +148,7 @@ jobs:
 
             console.log(`Notified PR #${prNumber} about Copilot completing issue #${issue.number}`);
 
-  # Job 3: When CodeRabbit approves, notify that the cycle is complete
+  # Job 4: When CodeRabbit approves, notify that the cycle is complete
   check-completion:
     name: Check if all fixes complete
     if: |
