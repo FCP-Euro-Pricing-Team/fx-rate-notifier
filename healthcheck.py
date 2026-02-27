@@ -59,10 +59,11 @@ def start_server() -> None:
     environment variable (default: 8080). Responds with JSON health
     status at GET /health.
     """
+    server = None
     try:
         server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     except OSError:
-        logger.error("Failed to bind port %d", PORT, exc_info=True)
+        logger.exception("Failed to bind port %d", PORT)
         raise
     logger.info("Healthcheck server running on port %d", PORT)
     try:
@@ -70,7 +71,8 @@ def start_server() -> None:
     except KeyboardInterrupt:
         logger.info("Healthcheck server shutting down")
     finally:
-        server.server_close()
+        if server is not None:
+            server.server_close()
 
 
 if __name__ == "__main__":
