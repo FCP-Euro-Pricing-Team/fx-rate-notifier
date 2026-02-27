@@ -1,6 +1,7 @@
-name: CodeRabbit → Copilot Automation Monitor
-# CodeRabbit handles issue creation + Copilot assignment natively via org UI settings.
-# This workflow monitors progress and notifies when the cycle completes.
+name: CodeRabbit → Copilot Automation
+# When CodeRabbit requests changes, Job 1 comments @coderabbitai asking it to
+# create a consolidated findings issue and assign Copilot.
+# Jobs 2-3 monitor progress and notify the PR when the cycle completes.
 
 on:
   pull_request_review:
@@ -11,7 +12,49 @@ on:
     types: [closed]
 
 jobs:
-  # Job 1: When a Copilot-assigned issue is closed, notify the original PR
+  # Job 1: When CodeRabbit requests changes, prompt it to create a consolidated issue
+  trigger-consolidated-issue:
+    name: Trigger consolidated issue creation
+    if: |
+      github.event_name == 'pull_request_review' &&
+      github.event.review.user.login == 'coderabbitai[bot]' &&
+      github.event.review.state == 'changes_requested'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ask CodeRabbit to create issue and assign Copilot
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: `@coderabbitai Please create **ONE consolidated GitHub issue** for all findings in this PR:
+
+            **Step 1: Create consolidated issue** (using MCP tool \`issue_write\`)
+            - Title: \`Fix CodeRabbit findings: PR #${prNumber} - All Files\`
+            - Body must include:
+              - Original PR: #${prNumber}
+              - All findings grouped by file with severity
+              - Full code context and suggested fixes for each
+              - Checklist of all items to fix
+            - Labels: \`coderabbit-review\`, \`parent-issue\`, \`bug-fix\`
+
+            **Step 2: Assign to Copilot** (using MCP tool \`assign_copilot_to_issue\`)
+            - Assign the consolidated issue to @copilot
+            - Copilot will create a PR with \`Fixes #<issue>\` to resolve all items
+
+            Create ONE issue with ALL findings, not separate issues per finding.
+            Report back with the issue number when complete.`
+            });
+
+            console.log(`Triggered CodeRabbit to create consolidated issue for PR #${prNumber}`);
+
+  # Job 2: When a Copilot-assigned issue is closed, notify the original PR
   monitor-copilot-progress:
     name: Monitor Copilot fixes
     if: |
@@ -67,7 +110,7 @@ jobs:
 
             console.log(`Notified PR #${prNumber} about Copilot completing issue #${issue.number}`);
 
-  # Job 2: When CodeRabbit approves, notify that the cycle is complete
+  # Job 3: When CodeRabbit approves, notify that the cycle is complete
   check-completion:
     name: Check if all fixes complete
     if: |
