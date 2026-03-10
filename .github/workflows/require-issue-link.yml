@@ -1,0 +1,12 @@
+name: Require Issue Link in PR
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  require-closes-issue:
+    uses: FCP-Euro-Pricing-Team/.github/.github/workflows/require-closes-issue.yml@main
+    with:
+      pr_body: ${{ github.event.pull_request.body }}
+      pr_number: ${{ github.event.pull_request.number }}
